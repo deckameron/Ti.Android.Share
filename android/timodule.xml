@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ti:module xmlns:ti="http://ti.appcelerator.org" xmlns:android="http://schemas.android.com/apk/res/android">
+    <android>
+        <manifest>
+            <application>
+                <provider
+                    android:name="androidx.core.content.FileProvider"
+                    android:authorities="${tiapp.properties['id']}.fileprovider"
+                    android:exported="false"
+                    android:grantUriPermissions="true">
+                    <meta-data
+                        android:name="android.support.FILE_PROVIDER_PATHS"
+                        android:resource="@xml/file_paths" />
+                </provider>
+            </application>
+        </manifest>
+    </android>
+</ti:module>

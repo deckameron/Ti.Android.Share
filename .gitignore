@@ -1,0 +1,46 @@
+# Titanium Module Build
+build/
+build.log
+*.pyc
+
+# Gradle
+.gradle/
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+.classpath
+.project
+.settings/
+bin/
+
+# Eclipse
+*.launch
+.metadata
+.recommenders/
+
+# Java
+*.class
+
+# Logs
+*.log
+
+# OS Files
+.DS_Store
+._*
+Thumbs.db
+*~
+
+# Node
+node_modules/
+
+# Titanium
+tmp/
+.fastdev.lock
+
+# Keep distribution ZIPs for releases
+!android/dist/*.zip

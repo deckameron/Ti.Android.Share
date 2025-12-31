@@ -39,15 +39,15 @@ public class ShareProxy implements TiActivityResultHandler {
             Object imageObj = params.get("image");
             Object callbackObj = params.get("callback");
 
-            // Armazenar callback se fornecido
+            // Store callback if provided
             if (callbackObj != null && callbackObj instanceof KrollFunction) {
                 this.callback = (KrollFunction) callbackObj;
             }
 
-            Log.d(TAG, "=== INÍCIO DO COMPARTILHAMENTO ===");
-            Log.d(TAG, "Mensagem: " + message);
-            Log.d(TAG, "Tipo do objeto imagem: " + (imageObj != null ? imageObj.getClass().getName() : "null"));
-            Log.d(TAG, "Callback fornecido: " + (this.callback != null));
+            Log.d(TAG, "=== SHARE START ===");
+            Log.d(TAG, "Message: " + message);
+            Log.d(TAG, "Image object type: " + (imageObj != null ? imageObj.getClass().getName() : "null"));
+            Log.d(TAG, "Callback provided: " + (this.callback != null));
 
             Intent shareIntent = new Intent(Intent.ACTION_SEND);
 
@@ -55,7 +55,7 @@ public class ShareProxy implements TiActivityResultHandler {
                 Uri imageUri = getImageUri(imageObj);
 
                 if (imageUri != null) {
-                    Log.d(TAG, "URI gerada: " + imageUri.toString());
+                    Log.d(TAG, "URI generated: " + imageUri.toString());
 
                     shareIntent.setType("image/jpeg");
                     shareIntent.putExtra(Intent.EXTRA_STREAM, imageUri);
@@ -63,43 +63,43 @@ public class ShareProxy implements TiActivityResultHandler {
                     shareIntent.putExtra(Intent.EXTRA_SUBJECT, subject);
                     shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
-                    Log.d(TAG, "Intent configurado com sucesso");
+                    Log.d(TAG, "Intent configured successfully");
                 } else {
-                    Log.e(TAG, "ERRO: URI da imagem é null!");
+                    Log.e(TAG, "ERROR: Image URI is null!");
                     shareIntent.setType("text/plain");
                     shareIntent.putExtra(Intent.EXTRA_TEXT, message);
                 }
             } else {
-                Log.d(TAG, "Nenhuma imagem fornecida, compartilhando apenas texto");
+                Log.d(TAG, "No image provided, sharing text only");
                 shareIntent.setType("text/plain");
                 shareIntent.putExtra(Intent.EXTRA_TEXT, message);
             }
 
-            Intent chooser = Intent.createChooser(shareIntent, "Compartilhar via");
+            Intent chooser = Intent.createChooser(shareIntent, "Share via");
 
-            // Se temos callback, usar startActivityForResult
+            // If we have a callback, use startActivityForResult
             if (this.callback != null) {
                 Activity activity = TiApplication.getAppCurrentActivity();
                 TiActivitySupport activitySupport = (TiActivitySupport) activity;
 
-                // Registrar este objeto como handler do resultado
+                // Register this object as the result handler
                 int requestCode = activitySupport.getUniqueResultCode();
                 activitySupport.launchActivityForResult(chooser, requestCode, this);
 
-                Log.d(TAG, "Compartilhamento iniciado com callback (requestCode: " + requestCode + ")");
+                Log.d(TAG, "Share started with callback (requestCode: " + requestCode + ")");
             } else {
-                // Sem callback, usar startActivity normal
+                // Without callback, use normal startActivity
                 chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 TiApplication.getInstance().startActivity(chooser);
-                Log.d(TAG, "Compartilhamento iniciado sem callback");
+                Log.d(TAG, "Share started without callback");
             }
 
-            Log.d(TAG, "=== COMPARTILHAMENTO INICIADO ===");
+            Log.d(TAG, "=== SHARE INITIATED ===");
 
         } catch (Exception e) {
-            Log.e(TAG, "ERRO FATAL ao compartilhar: " + e.getMessage(), e);
+            Log.e(TAG, "FATAL ERROR while sharing: " + e.getMessage(), e);
 
-            // Chamar callback com erro se disponível
+            // Call callback with error if available
             if (this.callback != null) {
                 fireCallback(false, "Error: " + e.getMessage());
             }
@@ -116,13 +116,13 @@ public class ShareProxy implements TiActivityResultHandler {
 
             if (resultCode == Activity.RESULT_OK) {
                 message = "Share completed successfully";
-                Log.d(TAG, "Compartilhamento bem-sucedido");
+                Log.d(TAG, "Share successful");
             } else if (resultCode == Activity.RESULT_CANCELED) {
                 message = "Share cancelled by user";
-                Log.d(TAG, "Compartilhamento cancelado pelo usuário");
+                Log.d(TAG, "Share cancelled by user");
             } else {
                 message = "Share failed with code: " + resultCode;
-                Log.d(TAG, "Compartilhamento falhou com código: " + resultCode);
+                Log.d(TAG, "Share failed with code: " + resultCode);
             }
 
             fireCallback(success, message);
@@ -145,7 +145,7 @@ public class ShareProxy implements TiActivityResultHandler {
             result.put("message", message);
             result.put(TiC.EVENT_PROPERTY_SOURCE, this.module);
 
-            Log.d(TAG, "Disparando callback - success: " + success + ", message: " + message);
+            Log.d(TAG, "Firing callback - success: " + success + ", message: " + message);
 
             this.callback.callAsync(this.module.getKrollObject(), result);
         }
@@ -158,34 +158,33 @@ public class ShareProxy implements TiActivityResultHandler {
 
             Log.d(TAG, "Authority: " + authority);
 
-            // Se for um Blob
+            // If it's a Blob
             if (imageObj instanceof TiBlob) {
-                Log.d(TAG, "Processando TiBlob");
+                Log.d(TAG, "Processing TiBlob");
                 TiBlob blob = (TiBlob) imageObj;
 
                 File cacheDir = TiApplication.getInstance().getCacheDir();
                 imageFile = new File(cacheDir, "share_" + System.currentTimeMillis() + ".jpg");
 
-                Log.d(TAG, "Caminho do arquivo: " + imageFile.getAbsolutePath());
+                Log.d(TAG, "File path: " + imageFile.getAbsolutePath());
 
                 FileOutputStream fos = new FileOutputStream(imageFile);
                 fos.write(blob.getBytes());
                 fos.close();
 
-                Log.d(TAG, "Arquivo criado com sucesso. Tamanho: " + imageFile.length() + " bytes");
-
+                Log.d(TAG, "File created successfully. Size: " + imageFile.length() + " bytes");
             }
-            // Se for um caminho de arquivo (String)
+            // If it's a file path (String)
             else if (imageObj instanceof String) {
                 String path = (String) imageObj;
-                Log.d(TAG, "Processando caminho de string: " + path);
+                Log.d(TAG, "Processing string path: " + path);
 
-                // Remover barra inicial se existir
+                // Remove leading slash if exists
                 if (path.startsWith("/")) {
                     path = path.substring(1);
                 }
 
-                // Tentar MÚLTIPLOS caminhos possíveis para recursos do Titanium
+                // Try MULTIPLE possible paths for Titanium resources
                 String[] possiblePaths = {
                         TiApplication.getInstance().getApplicationContext().getFilesDir().getParent() + "/app/_app_/" + path,
                         TiApplication.getInstance().getApplicationContext().getFilesDir().getParent() + "/app/" + path,
@@ -196,16 +195,16 @@ public class ShareProxy implements TiActivityResultHandler {
                 File resourceFile = null;
                 for (String testPath : possiblePaths) {
                     File test = new File(testPath);
-                    Log.d(TAG, "Tentando: " + testPath + " - Existe? " + test.exists());
+                    Log.d(TAG, "Trying: " + testPath + " - Exists? " + test.exists());
                     if (test.exists()) {
                         resourceFile = test;
-                        Log.d(TAG, "✓ Arquivo encontrado em: " + testPath);
+                        Log.d(TAG, "✓ File found at: " + testPath);
                         break;
                     }
                 }
 
                 if (resourceFile != null && resourceFile.exists()) {
-                    Log.d(TAG, "Arquivo de recursos encontrado!");
+                    Log.d(TAG, "Resource file found!");
 
                     File cacheDir = TiApplication.getInstance().getCacheDir();
                     imageFile = new File(cacheDir, "share_" + System.currentTimeMillis() + ".jpg");
@@ -222,9 +221,9 @@ public class ShareProxy implements TiActivityResultHandler {
                     fis.close();
                     fos.close();
 
-                    Log.d(TAG, "Arquivo copiado para cache. Tamanho: " + imageFile.length() + " bytes");
+                    Log.d(TAG, "File copied to cache. Size: " + imageFile.length() + " bytes");
                 } else {
-                    Log.d(TAG, "Tentando carregar como asset direto...");
+                    Log.d(TAG, "Trying to load as direct asset...");
 
                     try {
                         android.content.res.AssetManager assets = TiApplication.getInstance().getAssets();
@@ -243,22 +242,22 @@ public class ShareProxy implements TiActivityResultHandler {
                         is.close();
                         fos.close();
 
-                        Log.d(TAG, "✓ Asset carregado com sucesso! Tamanho: " + imageFile.length() + " bytes");
+                        Log.d(TAG, "✓ Asset loaded successfully! Size: " + imageFile.length() + " bytes");
 
                     } catch (Exception assetEx) {
-                        Log.e(TAG, "Falha ao carregar como asset: " + assetEx.getMessage());
+                        Log.e(TAG, "Failed to load as asset: " + assetEx.getMessage());
 
-                        Log.d(TAG, "Última tentativa: applicationDataDirectory");
+                        Log.d(TAG, "Last attempt: applicationDataDirectory");
                         imageFile = new File(TiApplication.getInstance().getFilesDir(), path);
-                        Log.d(TAG, "Caminho: " + imageFile.getAbsolutePath() + " - Existe? " + imageFile.exists());
+                        Log.d(TAG, "Path: " + imageFile.getAbsolutePath() + " - Exists? " + imageFile.exists());
                     }
                 }
             }
 
             if (imageFile != null && imageFile.exists()) {
-                Log.d(TAG, "✓✓✓ Arquivo final existe: " + imageFile.getAbsolutePath());
-                Log.d(TAG, "Tamanho: " + imageFile.length() + " bytes");
-                Log.d(TAG, "Pode ler? " + imageFile.canRead());
+                Log.d(TAG, "✓✓✓ Final file exists: " + imageFile.getAbsolutePath());
+                Log.d(TAG, "Size: " + imageFile.length() + " bytes");
+                Log.d(TAG, "Can read? " + imageFile.canRead());
 
                 Uri uri = FileProvider.getUriForFile(
                         TiApplication.getInstance(),
@@ -266,17 +265,17 @@ public class ShareProxy implements TiActivityResultHandler {
                         imageFile
                 );
 
-                Log.d(TAG, "✓✓✓ URI FileProvider gerada: " + uri.toString());
+                Log.d(TAG, "✓✓✓ FileProvider URI generated: " + uri.toString());
                 return uri;
             } else {
-                Log.e(TAG, "✗✗✗ ERRO: Arquivo não existe ou é null!");
+                Log.e(TAG, "✗✗✗ ERROR: File does not exist or is null!");
                 if (imageFile != null) {
-                    Log.e(TAG, "Caminho que falhou: " + imageFile.getAbsolutePath());
+                    Log.e(TAG, "Failed path: " + imageFile.getAbsolutePath());
                 }
             }
 
         } catch (Exception e) {
-            Log.e(TAG, "ERRO ao processar imagem: " + e.getMessage(), e);
+            Log.e(TAG, "ERROR processing image: " + e.getMessage(), e);
             e.printStackTrace();
         }
 

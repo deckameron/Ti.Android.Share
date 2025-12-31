@@ -23,7 +23,7 @@ public class TiAndroidShareModule extends KrollModule {
 
 	@Kroll.onAppCreate
 	public static void onAppCreate(TiApplication app) {
-		// Módulo inicializado
+		// Module Initialized
 	}
 
 	@Kroll.method

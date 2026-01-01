@@ -12,7 +12,8 @@ This module solves a critical limitation in Titanium SDK when sharing images on 
 
 ## Features
 
-- Share images from Resources, Blobs, or file paths
+- Share images from URLs, Resources, Blobs, or file paths
+- Automatic image download from remote URLs
 - Automatic FileProvider URI generation
 - Support for text and image combination sharing
 - Optional callback to handle share results (success, cancelled, or error)
@@ -90,6 +91,18 @@ imageView.addEventListener('load', function() {
 });
 ```
 
+### Share image from URL
+
+The module will automatically download the image in the background before sharing. If the download fails, it will share text only (or notify via callback if provided).
+
+```javascript
+ShareModule.share({
+    message: "Check out this amazing photo!",
+    subject: "Photo from the web",
+    image: "https://www.example.com/photos/sunset.jpg"
+});
+```
+
 ### Share text only
 
 ```javascript
@@ -132,6 +145,7 @@ Opens the Android share dialog with the specified content.
   - `message` (String, optional): Text content to share
   - `subject` (String, optional): Subject line for sharing (used by email apps)
   - `image` (String|TiBlob, optional): Image to share. Can be:
+    - **URL** (e.g., `"https://example.com/photo.jpg"`) - Will be downloaded automatically
     - Path to resource file (e.g., `/images/photo.jpg`)
     - Path from applicationDataDirectory
     - TiBlob object (from `imageView.toBlob()`, camera, etc.)
@@ -165,25 +179,40 @@ ShareModule.share({
 
 The module handles the following automatically:
 
-1. **Resource location**: Attempts to find images in multiple locations:
+1. **URL Detection**: Automatically detects if the image parameter is a URL (starts with `http://` or `https://`)
+
+2. **Image Download**: For URL images:
+   - Downloads the image asynchronously in the background
+   - Uses a 15-second timeout for connection and read operations
+   - Saves to the cache directory
+   - If download fails, shares text only or notifies via callback
+
+3. **Resource location**: For local files, attempts to find images in multiple locations:
    - Application resources (`/app/_app_/Resources/`)
    - Android assets
    - Application data directory
    - Cache directory
 
-2. **File preparation**: For resource files and Blobs:
+4. **File preparation**: For resource files and Blobs:
    - Copies the file to the cache directory
    - Ensures the file is accessible by the FileProvider
 
-3. **URI generation**: Creates a secure `content://` URI using Android's FileProvider
+5. **URI generation**: Creates a secure `content://` URI using Android's FileProvider
 
-4. **Permission granting**: Adds `FLAG_GRANT_READ_URI_PERMISSION` so receiving apps can access the file
+6. **Permission granting**: Adds `FLAG_GRANT_READ_URI_PERMISSION` so receiving apps can access the file
 
-5. **Intent creation**: Builds a proper `ACTION_SEND` intent with all necessary flags
+7. **Intent creation**: Builds a proper `ACTION_SEND` intent with all necessary flags
 
-6. **Result handling**: When a callback is provided, uses `startActivityForResult` to capture the share outcome and notify your application
+8. **Result handling**: When a callback is provided, uses `startActivityForResult` to capture the share outcome and notify your application
 
 ## Troubleshooting
+
+### URL image download issues
+
+If images from URLs fail to download:
+
+- Ensure the URL is publicly accessible (not behind authentication)
+- Check that the URL points directly to an image file (ends in .jpg, .png, etc.)
 
 ### Callback not firing
 
@@ -211,8 +240,15 @@ Ensure:
 - Your app has necessary permissions in `tiapp.xml`:
 
 ```xml
-<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+<!-- Necessária APENAS se você ler imagens de locais externos ao cache -->
+<!-- Only needed if you read images from external sources or cache -->
+<!-- Android 6 to 12 -->
+<uses-permission 
+    android:name="android.permission.READ_EXTERNAL_STORAGE"
+    android:maxSdkVersion="32"/>
+
+<!-- Android 13+ (replaced READ_EXTERNAL_STORAGE) -->
+<uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
 ```
 
 ## Contributing

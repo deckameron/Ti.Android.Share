@@ -11,6 +11,7 @@ package ti.android.share;
 import org.appcelerator.kroll.KrollModule;
 import org.appcelerator.kroll.annotations.Kroll;
 import org.appcelerator.titanium.TiApplication;
+import java.util.HashMap;
 
 @Kroll.module(name="TiAndroidShare", id="ti.android.share")
 public class TiAndroidShareModule extends KrollModule {
@@ -23,13 +24,14 @@ public class TiAndroidShareModule extends KrollModule {
 
 	@Kroll.onAppCreate
 	public static void onAppCreate(TiApplication app) {
-		// Module Initialized
+		// Module initialized
 	}
 
 	@Kroll.method
+	@SuppressWarnings("unchecked")
 	public void share(Object params) {
-		if (params instanceof java.util.HashMap) {
-			ShareProxy.share((java.util.HashMap)params, this);
+		if (params instanceof HashMap) {
+			ShareProxy.share((HashMap<String, Object>)params, this);
 		}
 	}
 }

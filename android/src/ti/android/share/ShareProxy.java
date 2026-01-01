@@ -3,7 +3,8 @@ package ti.android.share;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.AsyncTask;
+import android.os.Handler;
+import android.os.Looper;
 import androidx.core.content.FileProvider;
 import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.kroll.KrollFunction;
@@ -21,6 +22,8 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.HashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class ShareProxy implements TiActivityResultHandler {
 
@@ -29,14 +32,16 @@ public class ShareProxy implements TiActivityResultHandler {
 
     private KrollFunction callback;
     private KrollModule module;
+    private static final ExecutorService executorService = Executors.newSingleThreadExecutor();
+    private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    public static void share(HashMap params, KrollModule module) {
+    public static void share(HashMap<String, Object> params, KrollModule module) {
         ShareProxy proxy = new ShareProxy();
         proxy.module = module;
         proxy.executeShare(params);
     }
 
-    private void executeShare(HashMap params) {
+    private void executeShare(HashMap<String, Object> params) {
         try {
             String message = TiConvert.toString(params.get("message"), "");
             String subject = TiConvert.toString(params.get("subject"), "Share");
@@ -58,8 +63,8 @@ public class ShareProxy implements TiActivityResultHandler {
                 String imageUrl = (String) imageObj;
                 Log.d(TAG, "Detected URL image: " + imageUrl);
 
-                // Download image asynchronously
-                new ImageDownloadTask(message, subject).execute(imageUrl);
+                // Download image asynchronously using ExecutorService
+                downloadImageAsync(imageUrl, message, subject);
 
             } else {
                 // Process normally (local file or blob)
@@ -78,6 +83,95 @@ public class ShareProxy implements TiActivityResultHandler {
 
     private boolean isUrl(String str) {
         return str != null && (str.startsWith("http://") || str.startsWith("https://"));
+    }
+
+    private void downloadImageAsync(final String imageUrl, final String message, final String subject) {
+        executorService.execute(new Runnable() {
+            @Override
+            public void run() {
+                final File imageFile = downloadImage(imageUrl);
+
+                // Return to main thread
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (imageFile != null && imageFile.exists()) {
+                            Log.d(TAG, "Download completed, proceeding with share");
+                            processShare(message, subject, imageFile);
+                        } else {
+                            Log.e(TAG, "Download failed, sharing text only");
+
+                            // If callback exists, notify about download failure
+                            if (callback != null) {
+                                fireCallback(false, "Failed to download image");
+                            } else {
+                                // Share text only if no callback
+                                processShare(message, subject, null);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private File downloadImage(String imageUrl) {
+        HttpURLConnection connection = null;
+
+        try {
+            Log.d(TAG, "Starting image download from: " + imageUrl);
+
+            URL url = new URL(imageUrl);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(15000);
+            connection.setRequestMethod("GET");
+            connection.setDoInput(true);
+            connection.connect();
+
+            int responseCode = connection.getResponseCode();
+            Log.d(TAG, "Response code: " + responseCode);
+
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream input = connection.getInputStream();
+
+                // Create temporary file
+                File cacheDir = TiApplication.getInstance().getCacheDir();
+                File imageFile = new File(cacheDir, "share_url_" + System.currentTimeMillis() + ".jpg");
+
+                FileOutputStream output = new FileOutputStream(imageFile);
+
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                long totalBytes = 0;
+
+                while ((bytesRead = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, bytesRead);
+                    totalBytes += bytesRead;
+                }
+
+                output.close();
+                input.close();
+
+                Log.d(TAG, "✓ Image downloaded successfully. Size: " + totalBytes + " bytes");
+                Log.d(TAG, "Saved to: " + imageFile.getAbsolutePath());
+
+                return imageFile;
+
+            } else {
+                Log.e(TAG, "HTTP error code: " + responseCode);
+                return null;
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Download failed: " + e.getMessage(), e);
+            return null;
+
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
     }
 
     private void processShare(String message, String subject, Object imageObj) {
@@ -318,101 +412,5 @@ public class ShareProxy implements TiActivityResultHandler {
         }
 
         return null;
-    }
-
-    /**
-     * AsyncTask to download image from URL in background
-     */
-    private class ImageDownloadTask extends AsyncTask<String, Void, File> {
-
-        private String message;
-        private String subject;
-        private String errorMessage;
-
-        public ImageDownloadTask(String message, String subject) {
-            this.message = message;
-            this.subject = subject;
-        }
-
-        @Override
-        protected File doInBackground(String... urls) {
-            String imageUrl = urls[0];
-            HttpURLConnection connection = null;
-
-            try {
-                Log.d(TAG, "Starting image download from: " + imageUrl);
-
-                URL url = new URL(imageUrl);
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setConnectTimeout(15000);
-                connection.setReadTimeout(15000);
-                connection.setRequestMethod("GET");
-                connection.setDoInput(true);
-                connection.connect();
-
-                int responseCode = connection.getResponseCode();
-                Log.d(TAG, "Response code: " + responseCode);
-
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    InputStream input = connection.getInputStream();
-
-                    // Create temporary file
-                    File cacheDir = TiApplication.getInstance().getCacheDir();
-                    File imageFile = new File(cacheDir, "share_url_" + System.currentTimeMillis() + ".jpg");
-
-                    FileOutputStream output = new FileOutputStream(imageFile);
-
-                    byte[] buffer = new byte[4096];
-                    int bytesRead;
-                    long totalBytes = 0;
-
-                    while ((bytesRead = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, bytesRead);
-                        totalBytes += bytesRead;
-                    }
-
-                    output.close();
-                    input.close();
-
-                    Log.d(TAG, "✓ Image downloaded successfully. Size: " + totalBytes + " bytes");
-                    Log.d(TAG, "Saved to: " + imageFile.getAbsolutePath());
-
-                    return imageFile;
-
-                } else {
-                    errorMessage = "HTTP error code: " + responseCode;
-                    Log.e(TAG, errorMessage);
-                    return null;
-                }
-
-            } catch (Exception e) {
-                errorMessage = "Download failed: " + e.getMessage();
-                Log.e(TAG, errorMessage, e);
-                return null;
-
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
-        }
-
-        @Override
-        protected void onPostExecute(File imageFile) {
-            if (imageFile != null && imageFile.exists()) {
-                Log.d(TAG, "Download completed, proceeding with share");
-                processShare(message, subject, imageFile);
-            } else {
-                Log.e(TAG, "Download failed, sharing text only");
-
-                // If callback exists, notify about download failure
-                if (callback != null) {
-                    fireCallback(false, errorMessage != null ? errorMessage : "Failed to download image");
-                } else {
-                    // Share text only if no callback
-                    processShare(message, subject, null);
-                }
-            }
-        }
     }
 }

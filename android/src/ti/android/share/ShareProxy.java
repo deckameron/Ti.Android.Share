@@ -29,6 +29,7 @@ public class ShareProxy implements TiActivityResultHandler {
 
     private static final String TAG = "ShareProxy";
     private static final int REQUEST_CODE_SHARE = 1001;
+    private static final long MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB default limit
 
     private KrollFunction callback;
     private KrollModule module;
@@ -45,8 +46,13 @@ public class ShareProxy implements TiActivityResultHandler {
         try {
             String message = TiConvert.toString(params.get("message"), "");
             String subject = TiConvert.toString(params.get("subject"), "Share");
-            Object imageObj = params.get("image");
             Object callbackObj = params.get("callback");
+
+            // Support both "media" (new) and "image" (legacy) parameters
+            Object mediaObj = params.get("media");
+            if (mediaObj == null) {
+                mediaObj = params.get("image"); // Backward compatibility
+            }
 
             // Store callback if provided
             if (callbackObj != null && callbackObj instanceof KrollFunction) {
@@ -55,20 +61,20 @@ public class ShareProxy implements TiActivityResultHandler {
 
             Log.d(TAG, "=== SHARE START ===");
             Log.d(TAG, "Message: " + message);
-            Log.d(TAG, "Image object type: " + (imageObj != null ? imageObj.getClass().getName() : "null"));
+            Log.d(TAG, "Media object type: " + (mediaObj != null ? mediaObj.getClass().getName() : "null"));
             Log.d(TAG, "Callback provided: " + (this.callback != null));
 
-            // Check if image is a URL
-            if (imageObj instanceof String && isUrl((String) imageObj)) {
-                String imageUrl = (String) imageObj;
-                Log.d(TAG, "Detected URL image: " + imageUrl);
+            // Check if media is a URL
+            if (mediaObj instanceof String && isUrl((String) mediaObj)) {
+                String mediaUrl = (String) mediaObj;
+                Log.d(TAG, "Detected URL media: " + mediaUrl);
 
-                // Download image asynchronously using ExecutorService
-                downloadImageAsync(imageUrl, message, subject);
+                // Download media asynchronously
+                downloadMediaAsync(mediaUrl, message, subject);
 
             } else {
                 // Process normally (local file or blob)
-                processShare(message, subject, imageObj);
+                processShare(message, subject, mediaObj);
             }
 
         } catch (Exception e) {
@@ -85,25 +91,53 @@ public class ShareProxy implements TiActivityResultHandler {
         return str != null && (str.startsWith("http://") || str.startsWith("https://"));
     }
 
-    private void downloadImageAsync(final String imageUrl, final String message, final String subject) {
+    private String detectMediaType(String path) {
+        if (path == null) {
+            return "image/jpeg";
+        }
+
+        String lower = path.toLowerCase();
+
+        // Video formats
+        if (lower.endsWith(".mp4") || lower.endsWith(".mov") ||
+                lower.endsWith(".avi") || lower.endsWith(".3gp") ||
+                lower.endsWith(".mkv") || lower.endsWith(".webm") ||
+                lower.endsWith(".flv") || lower.endsWith(".m4v")) {
+            Log.d(TAG, "Detected video format: " + path);
+            return "video/*";
+        }
+
+        // Image formats (default)
+        Log.d(TAG, "Detected image format: " + path);
+        return "image/*";
+    }
+
+    private String getFileExtension(String path) {
+        if (path == null || !path.contains(".")) {
+            return ".jpg";
+        }
+        return path.substring(path.lastIndexOf("."));
+    }
+
+    private void downloadMediaAsync(final String mediaUrl, final String message, final String subject) {
         executorService.execute(new Runnable() {
             @Override
             public void run() {
-                final File imageFile = downloadImage(imageUrl);
+                final File mediaFile = downloadMedia(mediaUrl);
 
                 // Return to main thread
                 mainHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        if (imageFile != null && imageFile.exists()) {
+                        if (mediaFile != null && mediaFile.exists()) {
                             Log.d(TAG, "Download completed, proceeding with share");
-                            processShare(message, subject, imageFile);
+                            processShare(message, subject, mediaFile);
                         } else {
                             Log.e(TAG, "Download failed, sharing text only");
 
                             // If callback exists, notify about download failure
                             if (callback != null) {
-                                fireCallback(false, "Failed to download image");
+                                fireCallback(false, "Failed to download media");
                             } else {
                                 // Share text only if no callback
                                 processShare(message, subject, null);
@@ -115,16 +149,16 @@ public class ShareProxy implements TiActivityResultHandler {
         });
     }
 
-    private File downloadImage(String imageUrl) {
+    private File downloadMedia(String mediaUrl) {
         HttpURLConnection connection = null;
 
         try {
-            Log.d(TAG, "Starting image download from: " + imageUrl);
+            Log.d(TAG, "Starting media download from: " + mediaUrl);
 
-            URL url = new URL(imageUrl);
+            URL url = new URL(mediaUrl);
             connection = (HttpURLConnection) url.openConnection();
             connection.setConnectTimeout(15000);
-            connection.setReadTimeout(15000);
+            connection.setReadTimeout(30000); // Increased for videos
             connection.setRequestMethod("GET");
             connection.setDoInput(true);
             connection.connect();
@@ -133,13 +167,16 @@ public class ShareProxy implements TiActivityResultHandler {
             Log.d(TAG, "Response code: " + responseCode);
 
             if (responseCode == HttpURLConnection.HTTP_OK) {
+                // Get file extension from URL
+                String extension = getFileExtension(mediaUrl);
+
                 InputStream input = connection.getInputStream();
 
                 // Create temporary file
                 File cacheDir = TiApplication.getInstance().getCacheDir();
-                File imageFile = new File(cacheDir, "share_url_" + System.currentTimeMillis() + ".jpg");
+                File mediaFile = new File(cacheDir, "share_url_" + System.currentTimeMillis() + extension);
 
-                FileOutputStream output = new FileOutputStream(imageFile);
+                FileOutputStream output = new FileOutputStream(mediaFile);
 
                 byte[] buffer = new byte[4096];
                 int bytesRead;
@@ -148,15 +185,24 @@ public class ShareProxy implements TiActivityResultHandler {
                 while ((bytesRead = input.read(buffer)) != -1) {
                     output.write(buffer, 0, bytesRead);
                     totalBytes += bytesRead;
+
+                    // Check file size limit
+                    if (totalBytes > MAX_FILE_SIZE) {
+                        output.close();
+                        input.close();
+                        mediaFile.delete();
+                        Log.e(TAG, "File exceeds maximum size limit of " + (MAX_FILE_SIZE / (1024 * 1024)) + "MB");
+                        return null;
+                    }
                 }
 
                 output.close();
                 input.close();
 
-                Log.d(TAG, "✓ Image downloaded successfully. Size: " + totalBytes + " bytes");
-                Log.d(TAG, "Saved to: " + imageFile.getAbsolutePath());
+                Log.d(TAG, "✓ Media downloaded successfully. Size: " + (totalBytes / 1024) + "KB");
+                Log.d(TAG, "Saved to: " + mediaFile.getAbsolutePath());
 
-                return imageFile;
+                return mediaFile;
 
             } else {
                 Log.e(TAG, "HTTP error code: " + responseCode);
@@ -174,30 +220,41 @@ public class ShareProxy implements TiActivityResultHandler {
         }
     }
 
-    private void processShare(String message, String subject, Object imageObj) {
+    private void processShare(String message, String subject, Object mediaObj) {
         try {
             Intent shareIntent = new Intent(Intent.ACTION_SEND);
 
-            if (imageObj != null) {
-                Uri imageUri = getImageUri(imageObj);
+            if (mediaObj != null) {
+                Uri mediaUri = getMediaUri(mediaObj);
 
-                if (imageUri != null) {
-                    Log.d(TAG, "URI generated: " + imageUri.toString());
+                if (mediaUri != null) {
+                    Log.d(TAG, "URI generated: " + mediaUri.toString());
 
-                    shareIntent.setType("image/jpeg");
-                    shareIntent.putExtra(Intent.EXTRA_STREAM, imageUri);
+                    // Detect media type based on file path
+                    String mediaType = "image/jpeg"; // Default
+
+                    if (mediaObj instanceof String) {
+                        mediaType = detectMediaType((String) mediaObj);
+                    } else if (mediaObj instanceof File) {
+                        mediaType = detectMediaType(((File) mediaObj).getName());
+                    }
+
+                    Log.d(TAG, "Media type: " + mediaType);
+
+                    shareIntent.setType(mediaType);
+                    shareIntent.putExtra(Intent.EXTRA_STREAM, mediaUri);
                     shareIntent.putExtra(Intent.EXTRA_TEXT, message);
                     shareIntent.putExtra(Intent.EXTRA_SUBJECT, subject);
                     shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
                     Log.d(TAG, "Intent configured successfully");
                 } else {
-                    Log.e(TAG, "ERROR: Image URI is null!");
+                    Log.e(TAG, "ERROR: Media URI is null!");
                     shareIntent.setType("text/plain");
                     shareIntent.putExtra(Intent.EXTRA_TEXT, message);
                 }
             } else {
-                Log.d(TAG, "No image provided, sharing text only");
+                Log.d(TAG, "No media provided, sharing text only");
                 shareIntent.setType("text/plain");
                 shareIntent.putExtra(Intent.EXTRA_TEXT, message);
             }
@@ -277,38 +334,47 @@ public class ShareProxy implements TiActivityResultHandler {
         }
     }
 
-    private static Uri getImageUri(Object imageObj) {
+    private static Uri getMediaUri(Object mediaObj) {
         try {
-            File imageFile = null;
+            File mediaFile = null;
             String authority = TiApplication.getInstance().getPackageName() + ".fileprovider";
 
             Log.d(TAG, "Authority: " + authority);
 
             // If it's a Blob
-            if (imageObj instanceof TiBlob) {
+            if (mediaObj instanceof TiBlob) {
                 Log.d(TAG, "Processing TiBlob");
-                TiBlob blob = (TiBlob) imageObj;
+                TiBlob blob = (TiBlob) mediaObj;
+
+                // Try to detect extension from blob's mimetype
+                String extension = ".jpg";
+                String mimeType = blob.getMimeType();
+                if (mimeType != null) {
+                    if (mimeType.startsWith("video/")) {
+                        extension = ".mp4";
+                    }
+                }
 
                 File cacheDir = TiApplication.getInstance().getCacheDir();
-                imageFile = new File(cacheDir, "share_" + System.currentTimeMillis() + ".jpg");
+                mediaFile = new File(cacheDir, "share_" + System.currentTimeMillis() + extension);
 
-                Log.d(TAG, "File path: " + imageFile.getAbsolutePath());
+                Log.d(TAG, "File path: " + mediaFile.getAbsolutePath());
 
-                FileOutputStream fos = new FileOutputStream(imageFile);
+                FileOutputStream fos = new FileOutputStream(mediaFile);
                 fos.write(blob.getBytes());
                 fos.close();
 
-                Log.d(TAG, "File created successfully. Size: " + imageFile.length() + " bytes");
+                Log.d(TAG, "File created successfully. Size: " + (mediaFile.length() / 1024) + "KB");
 
             }
             // If it's a File object (already downloaded from URL)
-            else if (imageObj instanceof File) {
-                imageFile = (File) imageObj;
-                Log.d(TAG, "Using existing File object: " + imageFile.getAbsolutePath());
+            else if (mediaObj instanceof File) {
+                mediaFile = (File) mediaObj;
+                Log.d(TAG, "Using existing File object: " + mediaFile.getAbsolutePath());
             }
             // If it's a file path (String)
-            else if (imageObj instanceof String) {
-                String path = (String) imageObj;
+            else if (mediaObj instanceof String) {
+                String path = (String) mediaObj;
                 Log.d(TAG, "Processing string path: " + path);
 
                 // Remove leading slash if exists
@@ -338,11 +404,14 @@ public class ShareProxy implements TiActivityResultHandler {
                 if (resourceFile != null && resourceFile.exists()) {
                     Log.d(TAG, "Resource file found!");
 
+                    // Get file extension
+                    String extension = path.substring(path.lastIndexOf("."));
+
                     File cacheDir = TiApplication.getInstance().getCacheDir();
-                    imageFile = new File(cacheDir, "share_" + System.currentTimeMillis() + ".jpg");
+                    mediaFile = new File(cacheDir, "share_" + System.currentTimeMillis() + extension);
 
                     java.io.FileInputStream fis = new java.io.FileInputStream(resourceFile);
-                    FileOutputStream fos = new FileOutputStream(imageFile);
+                    FileOutputStream fos = new FileOutputStream(mediaFile);
 
                     byte[] buffer = new byte[1024];
                     int length;
@@ -353,7 +422,7 @@ public class ShareProxy implements TiActivityResultHandler {
                     fis.close();
                     fos.close();
 
-                    Log.d(TAG, "File copied to cache. Size: " + imageFile.length() + " bytes");
+                    Log.d(TAG, "File copied to cache. Size: " + (mediaFile.length() / 1024) + "KB");
                 } else {
                     Log.d(TAG, "Trying to load as direct asset...");
 
@@ -361,10 +430,12 @@ public class ShareProxy implements TiActivityResultHandler {
                         android.content.res.AssetManager assets = TiApplication.getInstance().getAssets();
                         java.io.InputStream is = assets.open("Resources/" + path);
 
-                        File cacheDir = TiApplication.getInstance().getCacheDir();
-                        imageFile = new File(cacheDir, "share_" + System.currentTimeMillis() + ".jpg");
+                        String extension = path.substring(path.lastIndexOf("."));
 
-                        FileOutputStream fos = new FileOutputStream(imageFile);
+                        File cacheDir = TiApplication.getInstance().getCacheDir();
+                        mediaFile = new File(cacheDir, "share_" + System.currentTimeMillis() + extension);
+
+                        FileOutputStream fos = new FileOutputStream(mediaFile);
                         byte[] buffer = new byte[1024];
                         int length;
                         while ((length = is.read(buffer)) > 0) {
@@ -374,40 +445,49 @@ public class ShareProxy implements TiActivityResultHandler {
                         is.close();
                         fos.close();
 
-                        Log.d(TAG, "✓ Asset loaded successfully! Size: " + imageFile.length() + " bytes");
+                        Log.d(TAG, "✓ Asset loaded successfully! Size: " + (mediaFile.length() / 1024) + "KB");
 
                     } catch (Exception assetEx) {
                         Log.e(TAG, "Failed to load as asset: " + assetEx.getMessage());
 
                         Log.d(TAG, "Last attempt: applicationDataDirectory");
-                        imageFile = new File(TiApplication.getInstance().getFilesDir(), path);
-                        Log.d(TAG, "Path: " + imageFile.getAbsolutePath() + " - Exists? " + imageFile.exists());
+                        mediaFile = new File(TiApplication.getInstance().getFilesDir(), path);
+                        Log.d(TAG, "Path: " + mediaFile.getAbsolutePath() + " - Exists? " + mediaFile.exists());
                     }
                 }
             }
 
-            if (imageFile != null && imageFile.exists()) {
-                Log.d(TAG, "✓✓✓ Final file exists: " + imageFile.getAbsolutePath());
-                Log.d(TAG, "Size: " + imageFile.length() + " bytes");
-                Log.d(TAG, "Can read? " + imageFile.canRead());
+            if (mediaFile != null && mediaFile.exists()) {
+                // Check file size
+                long fileSizeKB = mediaFile.length() / 1024;
+                long fileSizeMB = fileSizeKB / 1024;
+
+                Log.d(TAG, "✓✓✓ Final file exists: " + mediaFile.getAbsolutePath());
+                Log.d(TAG, "Size: " + fileSizeKB + "KB (" + fileSizeMB + "MB)");
+                Log.d(TAG, "Can read? " + mediaFile.canRead());
+
+                if (mediaFile.length() > MAX_FILE_SIZE) {
+                    Log.e(TAG, "⚠️ WARNING: File size (" + fileSizeMB + "MB) exceeds recommended limit of " + (MAX_FILE_SIZE / (1024 * 1024)) + "MB");
+                    Log.e(TAG, "Some apps may fail to handle this file size");
+                }
 
                 Uri uri = FileProvider.getUriForFile(
                         TiApplication.getInstance(),
                         authority,
-                        imageFile
+                        mediaFile
                 );
 
                 Log.d(TAG, "✓✓✓ FileProvider URI generated: " + uri.toString());
                 return uri;
             } else {
                 Log.e(TAG, "✗✗✗ ERROR: File does not exist or is null!");
-                if (imageFile != null) {
-                    Log.e(TAG, "Failed path: " + imageFile.getAbsolutePath());
+                if (mediaFile != null) {
+                    Log.e(TAG, "Failed path: " + mediaFile.getAbsolutePath());
                 }
             }
 
         } catch (Exception e) {
-            Log.e(TAG, "ERROR processing image: " + e.getMessage(), e);
+            Log.e(TAG, "ERROR processing media: " + e.getMessage(), e);
             e.printStackTrace();
         }
 
